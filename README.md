@@ -32,6 +32,9 @@ Simply drag any `.bin` file onto the executable and it will automatically conver
 ritobin_rust input.bin output.py
 ritobin_rust input.py output.json
 
+# Convert with custom hash directory
+ritobin_rust -d "path/to/hashes" input.bin
+
 # Show file information
 ritobin_rust info file.bin
 

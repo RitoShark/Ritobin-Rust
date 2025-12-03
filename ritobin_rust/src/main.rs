@@ -25,7 +25,7 @@ struct Cli {
     output: Option<PathBuf>,
 
     /// Directory to load hashes from
-    #[arg(long, global = true)]
+    #[arg(short = 'd', long, global = true)]
     dir: Option<PathBuf>,
 
     /// Recursive directory processing
@@ -90,7 +90,7 @@ enum Commands {
         input: PathBuf,
         
         /// Show detailed field information
-        #[arg(short, long)]
+        #[arg(short = 'D', long)]
         detailed: bool,
     },
     
@@ -121,15 +121,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Commands::Convert { input, output, recursive, verbose }) => {
             // Similar to default behavior but explicit
-            let mut unhasher = if !cli.keep_hashed {
-                let mut u = ritobin_rust::unhash::BinUnhasher::new();
-                if let Some(dir) = &cli.dir {
-                    load_hashes(&mut u, dir, *verbose);
-                }
-                Some(u)
-            } else {
-                None
-            };
+            // Similar to default behavior but explicit
+            let unhasher = setup_unhasher(&cli);
 
             if input.is_dir() {
                 if !recursive {
@@ -158,23 +151,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("🎯 Drag-and-drop mode: Converting {} to text format...", input.display());
                 
                 // Load hashes if available
-                let mut unhasher = {
-                    let mut u = ritobin_rust::unhash::BinUnhasher::new();
-                    
-                    if let Some(dir) = &cli.dir {
-                        load_hashes(&mut u, dir, cli.verbose);
-                    } else {
-                        // Try default path: %APPDATA%/RitoShark/Requirements/Hashes
-                        if let Ok(appdata) = std::env::var("APPDATA") {
-                            let default_path = PathBuf::from(appdata).join("RitoShark/Requirements/Hashes");
-                            if default_path.exists() {
-                                if cli.verbose { println!("Using default hash path: {}", default_path.display()); }
-                                load_hashes(&mut u, &default_path, cli.verbose);
-                            }
-                        }
-                    }
-                    Some(u)
-                };
+                // Load hashes if available
+                let unhasher = setup_unhasher(&cli);
 
                 // Process the file
                 let data = std::fs::read(input)?;
@@ -199,25 +177,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Standard mode with full options
-            let mut unhasher = if !cli.keep_hashed {
-                let mut u = ritobin_rust::unhash::BinUnhasher::new();
-                
-                if let Some(dir) = &cli.dir {
-                    load_hashes(&mut u, dir, cli.verbose);
-                } else {
-                    // Try default path: %APPDATA%/RitoShark/Requirements/Hashes
-                    if let Ok(appdata) = std::env::var("APPDATA") {
-                        let default_path = PathBuf::from(appdata).join("RitoShark/Requirements/Hashes");
-                        if default_path.exists() {
-                            if cli.verbose { println!("Using default hash path: {}", default_path.display()); }
-                            load_hashes(&mut u, &default_path, cli.verbose);
-                        }
-                    }
-                }
-                Some(u)
-            } else {
-                None
-            };
+            // Standard mode with full options
+            let unhasher = setup_unhasher(&cli);
 
             if input.is_dir() {
                 if !cli.recursive {
@@ -297,7 +258,83 @@ fn convert_hashes_command(
     Ok(())
 }
 
-fn load_hashes(unhasher: &mut ritobin_rust::unhash::BinUnhasher, dir: &Path, verbose: bool) {
+fn setup_unhasher(cli: &Cli) -> Option<ritobin_rust::unhash::BinUnhasher> {
+    if cli.keep_hashed {
+        return None;
+    }
+
+    let mut unhasher = ritobin_rust::unhash::BinUnhasher::new();
+    let mut loaded = false;
+
+    // 1. Explicit directory (highest priority)
+    if let Some(dir) = &cli.dir {
+        if dir.exists() {
+             if load_hashes(&mut unhasher, dir, cli.verbose) {
+                 loaded = true;
+             }
+        } else {
+             eprintln!("Warning: Specified hash directory does not exist: {}", dir.display());
+        }
+    } 
+    
+    // 2. Auto-discovery (if no explicit dir provided)
+    if !loaded && cli.dir.is_none() {
+        // Try AppData
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let path = PathBuf::from(appdata).join("RitoShark/Requirements/Hashes");
+            if path.exists() {
+                if cli.verbose { println!("Checking hash path: {}", path.display()); }
+                if load_hashes(&mut unhasher, &path, cli.verbose) {
+                    loaded = true;
+                }
+            }
+        }
+
+        // Try Executable Directory (Root)
+        if !loaded {
+            if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(root) = exe_path.parent() {
+                    // Try "Hashes" folder in root
+                    let hashes_dir = root.join("Hashes");
+                    if hashes_dir.exists() {
+                        if cli.verbose { println!("Checking hash path: {}", hashes_dir.display()); }
+                        if load_hashes(&mut unhasher, &hashes_dir, cli.verbose) {
+                            loaded = true;
+                        }
+                    }
+                    
+                    // Try root itself if still not loaded
+                    if !loaded {
+                        if cli.verbose { println!("Checking hash path: {}", root.display()); }
+                        if load_hashes(&mut unhasher, root, cli.verbose) {
+                            loaded = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // 3. Prompt if nothing found
+    if !loaded && cli.dir.is_none() {
+        eprintln!("⚠️  No hashes found.");
+        eprintln!("Checked: %APPDATA%/RitoShark/Requirements/Hashes");
+        eprintln!("Checked: Executable directory (and /Hashes subdirectory)");
+        eprint!("\nDo you want to continue without unhashing? [y/N]: ");
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+        
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        if input.trim().to_lowercase() != "y" {
+            std::process::exit(0);
+        }
+    }
+
+    Some(unhasher)
+}
+
+fn load_hashes(unhasher: &mut ritobin_rust::unhash::BinUnhasher, dir: &Path, verbose: bool) -> bool {
     let files = [
         "hashes.game.txt",
         "hashes.binentries.txt",
@@ -307,20 +344,25 @@ fn load_hashes(unhasher: &mut ritobin_rust::unhash::BinUnhasher, dir: &Path, ver
         "hashes.lcu.txt",
     ];
     
+    let mut loaded_any = false;
     for file in files {
         let path = dir.join(file);
         if path.exists() {
             if let Some(path_str) = path.to_str() {
                 if verbose { println!("Loading hashes from {}", path_str); }
                 // Use auto-loading which tries binary first, then text
-                if let Err(e) = unhasher.load_auto(path_str) {
-                    if verbose {
-                        eprintln!("Warning: Failed to load {}: {}", path_str, e);
+                match unhasher.load_auto(path_str) {
+                    Ok(_) => loaded_any = true,
+                    Err(e) => {
+                        if verbose {
+                            eprintln!("Warning: Failed to load {}: {}", path_str, e);
+                        }
                     }
                 }
             }
         }
     }
+    loaded_any
 }
 
 fn process_directory(
