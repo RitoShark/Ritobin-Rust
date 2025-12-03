@@ -1,0 +1,31 @@
+# Rust build artifacts
+/target
+/ritobin_rust/target
+Cargo.lock
+
+# Test files
+*.bin
+*.py
+!examples/**/*.py
+*.json
+!Cargo.toml
+!package.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+test_hashes.txt
+example_output.bin
